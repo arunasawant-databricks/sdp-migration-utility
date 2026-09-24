@@ -1,0 +1,79 @@
+# SDP Migration Utility
+
+A Databricks Asset Bundle that backfills a **source region's** historical bronze
+data (exposed via **Delta Share**) into the **target region's** pipeline-owned
+bronze streaming tables.
+
+For each table it runs a safe, resumable sequence:
+
+1. **DELETE** rows in the target up to a `cut_off_date` (containment)
+2. **INSERT** the Delta-shared rows up to the same `cut_off_date`
+3. **VERIFY** row-count parity
+
+Progress and state are tracked in a control table, so runs are **resumable** and
+tables are migrated **in parallel** with bounded concurrency.
+
+## Folder layout
+
+```
+sdp_migration_utility/
+├── databricks.yml                 # Bundle definition: variables + target workspace
+├── resources/
+│   ├── sdp_migration_job.yml          # Serverless job (default)
+│   └── sdp_migration_job_classic.yml  # Classic-compute variant (instance pools)
+└── src/
+    ├── config/
+    │   ├── sdp_migration_config.yaml   # Global settings: catalogs, control table, business unit
+    │   └── tables.csv                  # Per-table list: table_name, cut_off_date, checkpoint_col, ... (edit this)
+    ├── lib/                            # Utility library (config, control table, migration, ...)
+    └── notebooks/
+        ├── 00_setup.py                 # Load config, ensure control table, validate, register
+        ├── 10_migrate_table.py         # Per-table DELETE -> INSERT -> verify worker
+        └── 99_report.py                # Summarize, alert, release run lock
+```
+
+## Prerequisites
+
+- Databricks CLI (bundles) authenticated to the target workspace.
+- A Delta Share from the source region exposing its bronze streaming tables.
+- The target bronze streaming tables already created by their pipelines.
+
+## Configure
+
+1. **`databricks.yml`** — replace the placeholders:
+   - `target` workspace `host` → your workspace URL
+   - `target_catalog` / `control_catalog` → your catalog(s)
+   - schemas / control table name if different
+   - `max_parallel_tables` for concurrency
+
+2. **`src/config/sdp_migration_config.yaml`** — set `business_unit` and the shared/
+   target catalog + schema `defaults` and `control` table. (Global settings only —
+   the table list is NOT here.)
+
+3. **`src/config/tables.csv`** — one row per table to migrate (replace the example rows).
+   - **Mandatory** (must be filled for every row): `table_name`, `cut_off_date`, `checkpoint_col`.
+   - **Optional** — leave blank to use the YAML `defaults`: `shared_catalog`, `shared_schema`, `target_catalog`, `target_schema`, `partition_col`.
+   - **Optional** — leave blank for the built-in default: `chunk_backfill` (blank = `off`; `auto` = partition-at-a-time, resumable), `backfill_days` (blank = copy all history ≤ cut_off; else last N days only).
+
+## Deploy & run
+
+**Serverless (default):**
+
+```bash
+databricks bundle deploy -t target --profile <your-profile>
+databricks bundle run sdp_migration_job -t target --profile <your-profile>
+```
+
+**Classic compute (instance pools):** supply a real pool id at deploy time.
+
+```bash
+databricks bundle deploy -t target --profile <your-profile> \
+  -var instance_pool_id=<pool-id> -var driver_instance_pool_id=<pool-id>
+databricks bundle run sdp_migration_job_classic -t target --profile <your-profile>
+```
+
+## Job flow
+
+`setup` → `migrate` (For each table, bounded concurrency) → `report` (always runs).
+Only one run executes at a time (run-level guard + control-table run lock), so
+overlapping destructive DML is prevented.

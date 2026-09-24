@@ -1,0 +1,75 @@
+# Databricks Asset Bundle — SDP migration utility.
+# Backfills a source region's historical bronze data (exposed via Delta Share)
+# into the target region's pipeline-owned bronze streaming tables:
+# containment DELETE -> INSERT -> verify, driven by
+# src/config/sdp_migration_config.yaml. Reusable for any streaming table.
+bundle:
+  name: sdp_migration_utility
+
+include:
+  - resources/*.yml
+
+variables:
+  # --- Delta-share (read) source: source-region bronze STs exposed on the target ---
+  shared_catalog:
+    description: Delta-shared catalog on the target that exposes the source region's bronze STs
+    default: sdp_shared_from_source
+  shared_schema:
+    description: Schema under the shared catalog
+    default: sdp_bronze
+
+  # --- Backfill target: the target region's own pipeline-owned bronze STs ---
+  target_catalog:
+    description: Target catalog holding the target bronze streaming tables
+    default: <target_catalog>
+  target_schema:
+    description: Schema holding the target bronze streaming tables
+    default: sdp_bronze
+
+  # --- Control / state table (sdp_-prefixed) ---
+  control_catalog:
+    description: Catalog for the migration control table
+    default: <target_catalog>
+  control_schema:
+    description: Schema for the migration control table
+    default: sdp_migration
+  control_table:
+    description: Control table name
+    default: sdp_migration_control
+
+  # --- Runtime knobs ---
+  max_parallel_tables:
+    description: Bounded concurrency for the For each task (tables migrated in parallel)
+    default: 10
+
+  # --- Classic-compute option (instance pools) ---
+  # Used ONLY by the sdp_migration_job_classic job; the default sdp_migration_job stays
+  # serverless. The instance pool itself lives OUTSIDE this bundle: supply a real
+  # instance_pool_id from a classic-compute workspace at deploy time
+  # (`-var instance_pool_id=<id>`). Empty defaults keep the bundle valid but the classic job
+  # will not launch until a real pool id is provided in a workspace that supports classic compute.
+  instance_pool_id:
+    description: Worker instance pool id for the classic job cluster (empty = not configured)
+    default: ""
+  driver_instance_pool_id:
+    description: Driver instance pool id for the classic job cluster (set equal to the worker pool to share one)
+    default: ""
+  spark_version:
+    description: Databricks Runtime version for the classic job cluster
+    default: 16.4.x-scala2.12
+  classic_max_workers:
+    description: Autoscale upper bound (max_workers) for the classic job cluster; the cluster
+      autoscales 1..this value, so the worker count is never fixed. Override per deploy.
+    default: 10
+
+  # Which config file the jobs load (per-target overridable).
+  config_file:
+    description: Config filename under src/config that the job's config_path points to
+    default: sdp_migration_config.yaml
+
+targets:
+  # Deploy with: databricks bundle deploy -t target --profile <your-profile>
+  target:
+    default: true
+    workspace:
+      host: https://<your-workspace>.cloud.databricks.com

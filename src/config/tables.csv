@@ -1,0 +1,3 @@
+table_name,cut_off_date,checkpoint_col,shared_catalog,shared_schema,target_catalog,target_schema,partition_col,chunk_backfill,backfill_days
+example_partitioned_table,2026-01-31 23:59:59,event_timestamp,,,,,event_date,auto,
+example_kafka_table,2026-01-31 23:59:59,_kafka_timestamp,,,,,,,30

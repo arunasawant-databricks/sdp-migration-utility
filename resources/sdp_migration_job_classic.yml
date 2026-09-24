@@ -1,0 +1,106 @@
+# Classic-compute variant of sdp_migration_job — mirrors the reliance Lakeflow
+# framework's non-serverless job pattern: identical task tree, but every task runs
+# on a shared instance-pool job cluster instead of serverless. The pool lives OUTSIDE
+# this bundle; its id is supplied via the instance_pool_id / driver_instance_pool_id
+# variables (see databricks.yml). Leave those empty to run serverless via the sibling
+# sdp_migration_job; set them (in a classic-compute workspace) to run on classic here.
+#
+# NOTE: this workspace (fhryz3 / R2) is serverless-only, so this job is a ready-to-use
+# reference — deploy/run it against a classic-compute workspace with a real pool id.
+resources:
+  jobs:
+    sdp_migration_job_classic:
+      name: sdp_migration_job_classic
+      # Run-level guard (spec #13): only one run at a time. Combined with the
+      # control-table run lock, prevents overlapping destructive DML.
+      max_concurrent_runs: 1
+
+      tags:
+        project: sdp_migration
+        compute: classic
+
+      # Job parameters (bundle-substituted; overridable at run time).
+      parameters:
+        - name: source_root
+          default: ${workspace.file_path}/src
+        - name: config_path
+          default: ${workspace.file_path}/src/config/${var.config_file}
+        - name: webhook_url
+          default: ""
+
+      # Alert on job/task failure (spec #15a — no code).
+      email_notifications:
+        on_failure:
+          - <alerts@your-org.com>
+
+      # Shared instance-pool job cluster — spun up at run start, torn down at run end.
+      # Both driver and workers draw from instance pools (driver_instance_pool_id can be
+      # the same pool as the workers). Autoscale is capped by classic_max_workers so the
+      # cluster stays within the pool's max_capacity.
+      job_clusters:
+        - job_cluster_key: sdp_migration_cluster
+          new_cluster:
+            spark_version: ${var.spark_version}
+            instance_pool_id: ${var.instance_pool_id}
+            driver_instance_pool_id: ${var.driver_instance_pool_id}
+            # Unity Catalog access mode — required to read UC tables / write UC targets.
+            data_security_mode: SINGLE_USER
+            single_user_name: <your-run-as-user@your-org.com>
+            autoscale:
+              min_workers: 1
+              max_workers: ${var.classic_max_workers}
+
+      tasks:
+        # 1) SETUP: load config, ensure control tables, acquire run lock,
+        #    bulk-validate, register, emit the to-process table list.
+        - task_key: setup
+          job_cluster_key: sdp_migration_cluster
+          notebook_task:
+            notebook_path: ../src/notebooks/00_setup.py
+            base_parameters:
+              source_root: "{{job.parameters.source_root}}"
+              config_path: "{{job.parameters.config_path}}"
+              run_id: "{{job.run_id}}"
+
+        # 2) MIGRATE: For each table (bounded concurrency), run the per-table
+        #    DELETE -> INSERT -> verify worker. Iterates the setup task value.
+        - task_key: migrate
+          depends_on:
+            - task_key: setup
+          for_each_task:
+            inputs: "{{tasks.setup.values.tables}}"
+            concurrency: ${var.max_parallel_tables}
+            task:
+              task_key: migrate_iteration
+              job_cluster_key: sdp_migration_cluster
+              notebook_task:
+                notebook_path: ../src/notebooks/10_migrate_table.py
+                base_parameters:
+                  source_root: "{{job.parameters.source_root}}"
+                  input: "{{input}}"
+                  control_fqn: "{{tasks.setup.values.control_fqn}}"
+                  business_unit: "{{tasks.setup.values.business_unit}}"
+                  timezone: "{{tasks.setup.values.timezone}}"
+                  retry_attempts: "{{tasks.setup.values.retry_attempts}}"
+                  retry_backoff_seconds: "{{tasks.setup.values.retry_backoff_seconds}}"
+                  vacuum_after: "{{tasks.setup.values.vacuum_after}}"
+                  vacuum_retain_hours: "{{tasks.setup.values.vacuum_retain_hours}}"
+                  vacuum_override_retention_check: "{{tasks.setup.values.vacuum_override_retention_check}}"
+                  claim_lease_minutes: "{{tasks.setup.values.claim_lease_minutes}}"
+                  run_id: "{{job.run_id}}"
+
+        # 3) REPORT: always runs (even if some iterations failed). Summarize,
+        #    alert, release the run lock.
+        - task_key: report
+          job_cluster_key: sdp_migration_cluster
+          depends_on:
+            - task_key: migrate
+          run_if: ALL_DONE
+          notebook_task:
+            notebook_path: ../src/notebooks/99_report.py
+            base_parameters:
+              source_root: "{{job.parameters.source_root}}"
+              control_fqn: "{{tasks.setup.values.control_fqn}}"
+              business_unit: "{{tasks.setup.values.business_unit}}"
+              run_id: "{{job.run_id}}"
+              webhook_url: "{{job.parameters.webhook_url}}"

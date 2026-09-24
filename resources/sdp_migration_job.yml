@@ -1,0 +1,76 @@
+resources:
+  jobs:
+    sdp_migration_job:
+      name: sdp_migration_job
+      # Run-level guard (spec #13): only one run at a time. Combined with the
+      # control-table run lock, prevents overlapping destructive DML.
+      max_concurrent_runs: 1
+
+      tags:
+        project: sdp_migration
+
+      # Job parameters (bundle-substituted; overridable at run time).
+      parameters:
+        - name: source_root
+          default: ${workspace.file_path}/src
+        - name: config_path
+          default: ${workspace.file_path}/src/config/sdp_migration_config.yaml
+        - name: webhook_url
+          default: ""
+
+      # Alert on job/task failure (spec #15a — no code).
+      email_notifications:
+        on_failure:
+          - <alerts@your-org.com>
+
+      tasks:
+        # 1) SETUP: load config, ensure control tables, acquire run lock,
+        #    bulk-validate, register, emit the to-process table list.
+        - task_key: setup
+          notebook_task:
+            notebook_path: ../src/notebooks/00_setup.py
+            base_parameters:
+              source_root: "{{job.parameters.source_root}}"
+              config_path: "{{job.parameters.config_path}}"
+              run_id: "{{job.run_id}}"
+
+        # 2) MIGRATE: For each table (bounded concurrency), run the per-table
+        #    DELETE -> INSERT -> verify worker. Iterates the setup task value.
+        - task_key: migrate
+          depends_on:
+            - task_key: setup
+          for_each_task:
+            inputs: "{{tasks.setup.values.tables}}"
+            concurrency: ${var.max_parallel_tables}
+            task:
+              task_key: migrate_iteration
+              notebook_task:
+                notebook_path: ../src/notebooks/10_migrate_table.py
+                base_parameters:
+                  source_root: "{{job.parameters.source_root}}"
+                  input: "{{input}}"
+                  control_fqn: "{{tasks.setup.values.control_fqn}}"
+                  business_unit: "{{tasks.setup.values.business_unit}}"
+                  timezone: "{{tasks.setup.values.timezone}}"
+                  retry_attempts: "{{tasks.setup.values.retry_attempts}}"
+                  retry_backoff_seconds: "{{tasks.setup.values.retry_backoff_seconds}}"
+                  vacuum_after: "{{tasks.setup.values.vacuum_after}}"
+                  vacuum_retain_hours: "{{tasks.setup.values.vacuum_retain_hours}}"
+                  vacuum_override_retention_check: "{{tasks.setup.values.vacuum_override_retention_check}}"
+                  claim_lease_minutes: "{{tasks.setup.values.claim_lease_minutes}}"
+                  run_id: "{{job.run_id}}"
+
+        # 3) REPORT: always runs (even if some iterations failed). Summarize,
+        #    alert, release the run lock.
+        - task_key: report
+          depends_on:
+            - task_key: migrate
+          run_if: ALL_DONE
+          notebook_task:
+            notebook_path: ../src/notebooks/99_report.py
+            base_parameters:
+              source_root: "{{job.parameters.source_root}}"
+              control_fqn: "{{tasks.setup.values.control_fqn}}"
+              business_unit: "{{tasks.setup.values.business_unit}}"
+              run_id: "{{job.run_id}}"
+              webhook_url: "{{job.parameters.webhook_url}}"
