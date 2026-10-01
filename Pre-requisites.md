@@ -30,25 +30,20 @@ CREATE CATALOG IF NOT EXISTS sdp_shared_from_source
 ```
 
 The catalog name here (`sdp_shared_from_source`) and its schema must match the
-`shared_catalog` / `shared_schema` values in the config (step 3).
+`shared_catalog` / `shared_schema` values in `databricks.yml` (step 3).
 
 ## 3. Update the config files
 
-**`databricks.yml`** — set these values:
+**`databricks.yml`** — the single config surface; set these values:
 
 | Value | What to provide |
 |-------|-----------------|
 | `target` workspace `host` | Your R2 workspace URL |
-| `target_catalog` | R2 catalog holding the target bronze tables |
-| `control_catalog` | Catalog for the migration control table (usually same as target) |
-
-**`src/config/sdp_migration_config.yaml`** — global settings only:
-
-| Value | What to provide |
-|-------|-----------------|
-| `business_unit` | Your BU name |
-| `defaults.shared_catalog` / `shared_schema` | The Delta-shared catalog/schema from step 2 |
-| `defaults.target_catalog` / `target_schema` | R2 catalog/schema of the target tables |
+| `shared_catalog` / `shared_schema` | The Delta-shared catalog/schema from step 2 |
+| `target_catalog` / `target_schema` | R2 catalog/schema holding the target bronze tables |
+| `control_catalog` / `control_schema` / `control_table` | The migration control table (catalog usually same as target) |
+| `business_unit` | Your BU name (one BU per deployment) |
+| `timezone` | Session timezone for cut-off comparisons (default `Asia/Kolkata`) |
 
 **`src/config/tables.csv`** — one row per table to migrate (replace the example rows):
 
@@ -57,6 +52,6 @@ The catalog name here (`sdp_shared_from_source`) and its schema must match the
 | `table_name` | Name of the table to migrate |
 | `cut_off_date` | Cut-over timestamp — backfill rows up to this |
 | `checkpoint_col` | The table's timestamp/date column used for the cut-off |
-| (optional) `partition_col`, per-table catalog/schema overrides | Blank = use the YAML `defaults` |
+| (optional) `partition_col`, per-table catalog/schema overrides | Blank = use the `databricks.yml` values |
 | (optional) `chunk_backfill` | Blank = `off`; `auto` = partition-at-a-time, resumable backfill |
 | (optional) `backfill_days` | Blank = copy all history ≤ cut_off; else backfill only the last N days |

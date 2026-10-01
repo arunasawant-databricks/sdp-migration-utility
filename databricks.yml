@@ -1,8 +1,8 @@
 # Databricks Asset Bundle — SDP migration utility.
 # Backfills a source region's historical bronze data (exposed via Delta Share)
 # into the target region's pipeline-owned bronze streaming tables:
-# containment DELETE -> INSERT -> verify, driven by
-# src/config/sdp_migration_config.yaml. Reusable for any streaming table.
+# containment DELETE -> INSERT -> verify. One deployment per Business Unit.
+# Reusable for any streaming table.
 bundle:
   name: sdp_migration_utility
 
@@ -10,6 +10,11 @@ include:
   - resources/*.yml
 
 variables:
+  # THIS FILE IS THE ENTIRE DEPLOYER CONFIG SURFACE. Every setting below is passed to the
+  # job as a parameter and consumed at run time. The only other thing to edit is
+  # src/config/tables.csv (the per-table row list). Per-table cells in tables.csv override
+  # the shared_/target_ catalog+schema defaults set here.
+
   # --- Delta-share (read) source: source-region bronze STs exposed on the target ---
   shared_catalog:
     description: Delta-shared catalog on the target that exposes the source region's bronze STs
@@ -62,10 +67,17 @@ variables:
       autoscales 1..this value, so the worker count is never fixed. Override per deploy.
     default: 10
 
-  # Which config file the jobs load (per-target overridable).
-  config_file:
-    description: Config filename under src/config that the job's config_path points to
-    default: sdp_migration_config.yaml
+  # --- Migration payload (this deployment serves ONE Business Unit) ---
+  business_unit:
+    description: Business Unit this deployment migrates (one BU per deployment/repo)
+    default: bu_demo
+  timezone:
+    description: Session timezone for cut_off comparisons (checkpoint_col <= cut_off_date)
+    default: Asia/Kolkata
+  tables_csv:
+    description: Per-table CSV filename under src/config (only the name is a var; the row
+      contents stay in the file so large table lists aren't limited by job-parameter size)
+    default: tables.csv
 
 targets:
   # Deploy with: databricks bundle deploy -t target --profile <your-profile>

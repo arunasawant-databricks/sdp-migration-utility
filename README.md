@@ -23,7 +23,6 @@ sdp_migration_utility/
 │   └── sdp_migration_job_classic.yml  # Classic-compute variant (instance pools)
 └── src/
     ├── config/
-    │   ├── sdp_migration_config.yaml   # Global settings: catalogs, control table, business unit
     │   └── tables.csv                  # Per-table list: table_name, cut_off_date, checkpoint_col, ... (edit this)
     ├── lib/                            # Utility library (config, control table, migration, ...)
     └── notebooks/
@@ -40,19 +39,22 @@ sdp_migration_utility/
 
 ## Configure
 
-1. **`databricks.yml`** — replace the placeholders:
+This deployment serves **one Business Unit**. There are only two files to edit:
+
+1. **`databricks.yml`** — the single config surface. Replace the placeholders:
    - `target` workspace `host` → your workspace URL
-   - `target_catalog` / `control_catalog` → your catalog(s)
-   - schemas / control table name if different
-   - `max_parallel_tables` for concurrency
+   - `shared_catalog` / `shared_schema` → the Delta-share read path
+   - `target_catalog` / `target_schema` → where the backfill writes
+   - `control_catalog` / `control_schema` / `control_table` → the control table
+   - `business_unit` → the BU this deployment migrates
+   - `timezone` (default `Asia/Kolkata`), `tables_csv` (default `tables.csv`), `max_parallel_tables`
 
-2. **`src/config/sdp_migration_config.yaml`** — set `business_unit` and the shared/
-   target catalog + schema `defaults` and `control` table. (Global settings only —
-   the table list is NOT here.)
+   Every value is passed to the job as a parameter and consumed at run time.
 
-3. **`src/config/tables.csv`** — one row per table to migrate (replace the example rows).
+2. **`src/config/tables.csv`** — one row per table to migrate (replace the example rows).
+   The only file besides `databricks.yml` you edit.
    - **Mandatory** (must be filled for every row): `table_name`, `cut_off_date`, `checkpoint_col`.
-   - **Optional** — leave blank to use the YAML `defaults`: `shared_catalog`, `shared_schema`, `target_catalog`, `target_schema`, `partition_col`.
+   - **Optional** — leave blank to use the `databricks.yml` values: `shared_catalog`, `shared_schema`, `target_catalog`, `target_schema`, `partition_col`.
    - **Optional** — leave blank for the built-in default: `chunk_backfill` (blank = `off`; `auto` = partition-at-a-time, resumable), `backfill_days` (blank = copy all history ≤ cut_off; else last N days only).
 
 ## Deploy & run
@@ -68,7 +70,7 @@ databricks bundle run sdp_migration_job -t target --profile <your-profile>
 
 ```bash
 databricks bundle deploy -t target --profile <your-profile> \
-  -var instance_pool_id=<pool-id> -var driver_instance_pool_id=<pool-id>
+  --var="instance_pool_id=<pool-id>" --var="driver_instance_pool_id=<pool-id>"
 databricks bundle run sdp_migration_job_classic -t target --profile <your-profile>
 ```
 
