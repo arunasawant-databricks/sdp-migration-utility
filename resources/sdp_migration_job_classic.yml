@@ -1,12 +1,12 @@
-# Classic-compute variant of sdp_migration_job — mirrors the reliance Lakeflow
-# framework's non-serverless job pattern: identical task tree, but every task runs
-# on a shared instance-pool job cluster instead of serverless. The pool lives OUTSIDE
-# this bundle; its id is supplied via the instance_pool_id / driver_instance_pool_id
-# variables (see databricks.yml). Leave those empty to run serverless via the sibling
-# sdp_migration_job; set them (in a classic-compute workspace) to run on classic here.
+# Classic-compute variant of sdp_migration_job — a non-serverless job pattern:
+# identical task tree, but every task runs on a shared instance-pool job cluster
+# instead of serverless. The pool lives OUTSIDE this bundle; its id is supplied via
+# the instance_pool_id / driver_instance_pool_id variables (see databricks.yml).
+# Leave those empty to run serverless via the sibling sdp_migration_job; set them
+# (in a classic-compute workspace) to run on classic here.
 #
-# NOTE: this workspace (fhryz3 / R2) is serverless-only, so this job is a ready-to-use
-# reference — deploy/run it against a classic-compute workspace with a real pool id.
+# NOTE: on a serverless-only workspace this job is a ready-to-use reference —
+# deploy/run it against a classic-compute workspace with a real pool id.
 resources:
   jobs:
     sdp_migration_job_classic:
@@ -23,10 +23,30 @@ resources:
       parameters:
         - name: source_root
           default: ${workspace.file_path}/src
-        - name: config_path
-          default: ${workspace.file_path}/src/config/${var.config_file}
+        - name: tables_csv_path
+          default: ${workspace.file_path}/src/config/${var.tables_csv}
+        - name: business_unit
+          default: ${var.business_unit}
+        - name: timezone
+          default: ${var.timezone}
         - name: webhook_url
           default: ""
+        # Catalog/schema/control values from the databricks.yml bundle variables,
+        # injected into the config at setup (there is no config YAML).
+        - name: shared_catalog
+          default: ${var.shared_catalog}
+        - name: shared_schema
+          default: ${var.shared_schema}
+        - name: target_catalog
+          default: ${var.target_catalog}
+        - name: target_schema
+          default: ${var.target_schema}
+        - name: control_catalog
+          default: ${var.control_catalog}
+        - name: control_schema
+          default: ${var.control_schema}
+        - name: control_table
+          default: ${var.control_table}
 
       # Alert on job/task failure (spec #15a — no code).
       email_notifications:
@@ -59,8 +79,17 @@ resources:
             notebook_path: ../src/notebooks/00_setup.py
             base_parameters:
               source_root: "{{job.parameters.source_root}}"
-              config_path: "{{job.parameters.config_path}}"
+              tables_csv_path: "{{job.parameters.tables_csv_path}}"
+              business_unit: "{{job.parameters.business_unit}}"
+              timezone: "{{job.parameters.timezone}}"
               run_id: "{{job.run_id}}"
+              shared_catalog: "{{job.parameters.shared_catalog}}"
+              shared_schema: "{{job.parameters.shared_schema}}"
+              target_catalog: "{{job.parameters.target_catalog}}"
+              target_schema: "{{job.parameters.target_schema}}"
+              control_catalog: "{{job.parameters.control_catalog}}"
+              control_schema: "{{job.parameters.control_schema}}"
+              control_table: "{{job.parameters.control_table}}"
 
         # 2) MIGRATE: For each table (bounded concurrency), run the per-table
         #    DELETE -> INSERT -> verify worker. Iterates the setup task value.

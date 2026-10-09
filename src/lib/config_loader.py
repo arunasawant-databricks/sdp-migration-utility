@@ -188,13 +188,18 @@ def _read_tables_csv(path: str) -> List[Dict[str, Any]]:
     return rows
 
 
-def load_config(path: str) -> MigrationConfig:
+def load_config(path: str, overrides: Optional[Dict[str, Any]] = None) -> MigrationConfig:
     """Load and validate the migration config from a YAML file path.
 
     The per-table list is ALWAYS read from a CSV: the YAML must set `tables_csv` (path
     resolved relative to the YAML file's own directory). Global settings (`defaults`,
     `control`, `business_unit`, `timezone`) stay in the YAML; only the table rows live in
     the CSV.
+
+    `overrides` (optional) carries catalog/schema/control values supplied from the
+    databricks.yml bundle variables (passed as job parameters). When present and
+    non-empty, they replace the matching YAML `defaults`/`control` values; blank or absent
+    override keys fall back to the YAML (current behavior). See parse_config.
     """
     with open(path, "r") as fh:
         raw = yaml.safe_load(fh)
@@ -211,22 +216,91 @@ def load_config(path: str) -> MigrationConfig:
         raise ConfigError(f"tables_csv file not found: {csv_path}")
     raw["tables"] = _read_tables_csv(csv_path)
 
-    return parse_config(raw)
+    return parse_config(raw, overrides=overrides)
 
 
-def parse_config(raw: Dict[str, Any]) -> MigrationConfig:
-    """Validate + resolve an already-parsed config dict into a MigrationConfig."""
+def load_config_from_params(
+    csv_path: str,
+    business_unit: str,
+    timezone: Optional[str] = None,
+    overrides: Optional[Dict[str, Any]] = None,
+) -> MigrationConfig:
+    """Build a MigrationConfig directly from job parameters + a per-table CSV (no YAML).
+
+    This is the deployment path for this utility: there is no config YAML. Catalogs/schemas
+    and the control table come from `overrides` (the databricks.yml bundle variables, passed
+    as job parameters); `business_unit` and `timezone` come from their own parameters; the
+    per-table list is read from `csv_path`. Per-table cells in the CSV still override the
+    shared_/target_ catalog+schema values from `overrides`.
+    """
+    if not business_unit or not str(business_unit).strip():
+        raise ConfigError("business_unit is required — set it in databricks.yml")
+    if not csv_path or not os.path.exists(csv_path):
+        raise ConfigError(f"tables_csv file not found: {csv_path}")
+    raw: Dict[str, Any] = {
+        "version": 1,
+        "business_unit": str(business_unit).strip(),
+        "defaults": {"timezone": timezone} if (timezone and str(timezone).strip()) else {},
+        "tables": _read_tables_csv(csv_path),
+    }
+    return parse_config(raw, overrides=overrides)
+
+
+# Override keys that map onto the YAML `defaults` block (shared/target catalog+schema).
+_DEFAULTS_OVERRIDE_KEYS = ("shared_catalog", "shared_schema", "target_catalog", "target_schema")
+# Override keys that map onto the YAML `control` block: override_key -> control field.
+_CONTROL_OVERRIDE_KEYS = {
+    "control_catalog": "catalog",
+    "control_schema": "schema",
+    "control_table": "table",
+}
+
+
+def _clean_overrides(overrides: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Keep only override entries with a non-empty (stripped) string value.
+
+    A blank/None override is dropped so the YAML value is used — this is what makes an
+    empty databricks.yml var fall back to the config file (no behavior change).
+    """
+    if not overrides:
+        return {}
+    clean: Dict[str, str] = {}
+    for k, v in overrides.items():
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s:
+            clean[k] = s
+    return clean
+
+
+def parse_config(raw: Dict[str, Any], overrides: Optional[Dict[str, Any]] = None) -> MigrationConfig:
+    """Validate + resolve an already-parsed config dict into a MigrationConfig.
+
+    `overrides` (optional) supplies catalog/schema/control values from the databricks.yml
+    bundle variables. Non-empty overrides replace the YAML `defaults`/`control` values
+    BEFORE validation and per-table resolution; per-table `tables.csv` cells still win over
+    the (possibly overridden) defaults. Empty/absent overrides leave the YAML untouched.
+    """
     if not isinstance(raw, dict):
         raise ConfigError("config root must be a mapping")
 
-    defaults = raw.get("defaults") or {}
+    ov = _clean_overrides(overrides)
+
+    defaults = dict(raw.get("defaults") or {})
+    for k in _DEFAULTS_OVERRIDE_KEYS:
+        if k in ov:
+            defaults[k] = ov[k]
     missing = [k for k in _REQUIRED_DEFAULTS if not defaults.get(k)]
     if missing:
         raise ConfigError(f"defaults missing required keys: {missing}")
 
     timezone = defaults.get("timezone", "Asia/Kolkata")
 
-    control_raw = raw.get("control") or {}
+    control_raw = dict(raw.get("control") or {})
+    for ov_key, field_name in _CONTROL_OVERRIDE_KEYS.items():
+        if ov_key in ov:
+            control_raw[field_name] = ov[ov_key]
     for k in ("catalog", "schema", "table"):
         if not control_raw.get(k):
             raise ConfigError(f"control.{k} is required")

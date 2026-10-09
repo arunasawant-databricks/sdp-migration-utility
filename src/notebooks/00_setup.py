@@ -12,20 +12,36 @@ import os
 import sys
 
 dbutils.widgets.text("source_root", "", "Deployed src/ root (workspace path)")
-dbutils.widgets.text("config_path", "", "Path to sdp_migration_config.yaml")
+dbutils.widgets.text("tables_csv_path", "", "Path to the per-table CSV")
+dbutils.widgets.text("business_unit", "", "Business Unit this run migrates")
+dbutils.widgets.text("timezone", "", "Session timezone (cut_off comparisons)")
 dbutils.widgets.text("run_id", "", "Job run id")
+# All config comes from the databricks.yml bundle variables (passed as job parameters);
+# there is no config YAML. Catalog/schema/control values are injected as `config_overrides`.
+for _w in ("shared_catalog", "shared_schema", "target_catalog", "target_schema",
+           "control_catalog", "control_schema", "control_table"):
+    dbutils.widgets.text(_w, "", _w)
 
 source_root = dbutils.widgets.get("source_root")
-config_path = dbutils.widgets.get("config_path")
+tables_csv_path = dbutils.widgets.get("tables_csv_path")
+business_unit = dbutils.widgets.get("business_unit")
+timezone = dbutils.widgets.get("timezone")
 run_id = dbutils.widgets.get("run_id") or "manual"
+# Catalog/schema/control values from databricks.yml; the loader drops any left blank
+# (which then fails validation with a message pointing back to databricks.yml).
+config_overrides = {
+    _w: dbutils.widgets.get(_w)
+    for _w in ("shared_catalog", "shared_schema", "target_catalog", "target_schema",
+               "control_catalog", "control_schema", "control_table")
+}
 
 # Make the utility library importable.
 sys.path.insert(0, os.path.join(source_root, "lib"))
 
-from config_loader import load_config          # noqa: E402
-from control_table import ControlTable, Status  # noqa: E402
-from validation import bulk_validate            # noqa: E402
-from pipeline_lookup import resolve_many         # noqa: E402
+from config_loader import load_config_from_params  # noqa: E402
+from control_table import ControlTable, Status      # noqa: E402
+from validation import bulk_validate                # noqa: E402
+from pipeline_lookup import resolve_many             # noqa: E402
 
 
 def _read_path(p):
@@ -36,7 +52,8 @@ def _read_path(p):
     return p
 
 # COMMAND ----------
-cfg = load_config(_read_path(config_path))
+cfg = load_config_from_params(
+    _read_path(tables_csv_path), business_unit, timezone, overrides=config_overrides)
 spark.conf.set("spark.sql.session.timeZone", cfg.timezone)
 print(f"BU={cfg.business_unit} tz={cfg.timezone} tables={len(cfg.tables)} "
       f"control={cfg.control.fqn}")

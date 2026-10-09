@@ -1,6 +1,6 @@
 """Partition-pruning helper for the containment DELETE.
 
-Adopts the technique from the reliance data_retention framework: when the target
+Adopts a common data-retention technique: when the target
 table is partitioned on a date/timestamp column that is aligned with the
 checkpoint column, add a coarse partition predicate so Delta only rewrites the
 relevant partitions, instead of scanning the whole table.
