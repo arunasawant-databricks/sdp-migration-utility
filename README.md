@@ -66,7 +66,10 @@ databricks bundle deploy -t target --profile <your-profile>
 databricks bundle run sdp_migration_job -t target --profile <your-profile>
 ```
 
-**Classic compute (instance pools):** supply a real pool id at deploy time.
+**Classic compute (instance pools):** supply a real pool id at deploy time. The job
+cluster uses **Standard access mode (`USER_ISOLATION`)**. Do not switch it to
+`SINGLE_USER` (Dedicated): reading Delta-Shared streaming tables on dedicated compute
+goes through serverless data filtering, which fails on private-only networking.
 
 ```bash
 databricks bundle deploy -t target --profile <your-profile> \
