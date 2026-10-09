@@ -63,9 +63,11 @@ resources:
             spark_version: ${var.spark_version}
             instance_pool_id: ${var.instance_pool_id}
             driver_instance_pool_id: ${var.driver_instance_pool_id}
-            # Unity Catalog access mode — required to read UC tables / write UC targets.
-            data_security_mode: SINGLE_USER
-            single_user_name: <your-run-as-user@your-org.com>
+            # Unity Catalog STANDARD access mode (USER_ISOLATION). Required to read
+            # Delta-Shared streaming tables: dedicated (SINGLE_USER) compute offloads that
+            # read to serverless data filtering, which fails on private-only networking.
+            # Standard mode enforces it on the cluster itself.
+            data_security_mode: USER_ISOLATION
             autoscale:
               min_workers: 1
               max_workers: ${var.classic_max_workers}
